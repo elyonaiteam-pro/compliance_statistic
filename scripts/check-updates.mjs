@@ -1,21 +1,37 @@
 // Standalone script run by GitHub Actions on a schedule.
-// Duplicates the fetch/parse logic from src/lib/eis.ts and src/lib/db.ts
-// in plain JS so it runs with `node` alone, no Next.js build needed.
+// Duplicates the fetch/parse logic from src/lib/eis.ts in plain JS so it
+// runs with `node` alone, no Next.js build needed. Notifies users by email
+// (via Resend) instead of browser push — see src/lib/auth.ts / users table.
 import { createClient } from "@libsql/client";
 import * as cheerio from "cheerio";
-import webpush from "web-push";
+import nodemailer from "nodemailer";
 
 const db = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
 });
 
-if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(
-    "mailto:admin@example.com",
-    process.env.VAPID_PUBLIC_KEY,
-    process.env.VAPID_PRIVATE_KEY
-  );
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+
+const transporter =
+  GMAIL_USER && GMAIL_APP_PASSWORD
+    ? nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+      })
+    : null;
+
+async function sendEmail(to, subject, html, text) {
+  if (!transporter) {
+    console.warn("GMAIL_USER/GMAIL_APP_PASSWORD не заданы — письмо не отправлено:", to, subject);
+    return;
+  }
+  try {
+    await transporter.sendMail({ from: GMAIL_USER, to, subject, html, text });
+  } catch (err) {
+    console.error(`Не удалось отправить письмо ${to}:`, err.message);
+  }
 }
 
 function sectionByTitle($, titleText) {
@@ -59,6 +75,13 @@ async function fetchProcurement(regNumber) {
 }
 
 const FIELDS = ["title", "customer", "price", "status", "deadline"];
+const FIELD_LABELS = {
+  title: "Название",
+  customer: "Заказчик",
+  price: "Цена",
+  status: "Статус",
+  deadline: "Срок подачи заявок",
+};
 
 async function checkOne(row) {
   const fresh = await fetchProcurement(row.reg_number);
@@ -67,7 +90,6 @@ async function checkOne(row) {
   for (const field of FIELDS) {
     const oldValue = row[field];
     const newValue = fresh[field];
-    // Loose comparison: null/undefined and stringified numbers treated as equal when both empty.
     if (String(oldValue ?? "") !== String(newValue ?? "")) {
       changes.push({ field, oldValue, newValue });
     }
@@ -104,33 +126,51 @@ async function checkOne(row) {
     ],
   });
 
-  // Notify subscribers for this procurement.
-  const subs = await db.execute({
-    sql: "SELECT * FROM push_subscriptions WHERE procurement_id = ?",
+  // Notify users tracking this procurement, if their trial/subscription is active.
+  const subscribers = await db.execute({
+    sql: `SELECT users.email, users.trial_ends_at, users.subscription_status, users.subscription_ends_at
+          FROM user_procurements
+          JOIN users ON users.id = user_procurements.user_id
+          WHERE user_procurements.procurement_id = ?`,
     args: [row.id],
   });
 
-  const payload = JSON.stringify({
-    title: `Изменение по закупке № ${row.reg_number}`,
-    body: changes.map((c) => `${c.field}: ${c.oldValue} → ${c.newValue}`).join("; "),
-  });
+  const changesHtml = changes
+    .map((c) => `<li><b>${FIELD_LABELS[c.field] || c.field}</b>: ${c.oldValue} → ${c.newValue}</li>`)
+    .join("");
 
-  for (const sub of subs.rows) {
-    try {
-      await webpush.sendNotification(
-        {
-          endpoint: sub.endpoint,
-          keys: { p256dh: sub.p256dh, auth: sub.auth },
-        },
-        payload
-      );
-    } catch (err) {
-      console.error(`push failed for subscription ${sub.id}:`, err.message);
-    }
+  for (const sub of subscribers.rows) {
+    const subscriptionActive =
+      sub.subscription_status === "active" &&
+      (!sub.subscription_ends_at || new Date(sub.subscription_ends_at) > new Date());
+    const accessActive = subscriptionActive || new Date(sub.trial_ends_at) > new Date();
+    if (!accessActive) continue;
+
+    const changesText = changes
+      .map((c) => `- ${FIELD_LABELS[c.field] || c.field}: ${c.oldValue} → ${c.newValue}`)
+      .join("\n");
+
+    await sendEmail(
+      sub.email,
+      `Изменение по закупке № ${row.reg_number}`,
+      `<p>По закупке <b>${row.reg_number}</b> (${fresh.title || ""}) зафиксированы изменения:</p>
+       <ul>${changesHtml}</ul>`,
+      `По закупке ${row.reg_number} (${fresh.title || ""}) зафиксированы изменения:\n\n${changesText}`
+    );
+  }
+}
+
+async function ensureSubscriptionColumn() {
+  // The web app adds this column on first request after deploy; make sure the
+  // cron job doesn't fail if it happens to run before that.
+  const cols = await db.execute("PRAGMA table_info(users)");
+  if (!cols.rows.some((r) => String(r.name) === "subscription_ends_at")) {
+    await db.execute("ALTER TABLE users ADD COLUMN subscription_ends_at TEXT");
   }
 }
 
 async function main() {
+  await ensureSubscriptionColumn();
   const result = await db.execute("SELECT * FROM procurements");
   for (const row of result.rows) {
     try {

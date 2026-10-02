@@ -1,0 +1,30 @@
+name: Check DonatePay payments
+
+on:
+  schedule:
+    # Every 30 minutes. GitHub's cron is best-effort (runs can be delayed), and
+    # a private repo has ~2000 free Actions minutes/month, so don't go much lower.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {} # manual "Run workflow" from the Actions tab
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install @libsql/client nodemailer --no-save
+
+      - name: Process payments
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          DONATEPAY_API_KEY: ${{ secrets.DONATEPAY_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: node scripts/check-payments.mjs

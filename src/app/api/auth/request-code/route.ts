@@ -1,17 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ensureSchema } from "@/lib/db";
-import { createLoginCode } from "@/lib/auth";
+import { createLoginCode, isValidEmail, normalizeEmail, RateLimitError } from "@/lib/auth";
 import { sendEmail } from "@/lib/email";
+import { getClientIp, readJsonObject } from "@/lib/http";
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  const { email } = await req.json();
+  const body = await readJsonObject(req);
 
-  if (!email || typeof email !== "string" || !email.includes("@")) {
+  if (!body || !isValidEmail(body.email)) {
     return NextResponse.json({ error: "Введите корректный email" }, { status: 400 });
   }
+  const email = normalizeEmail(body.email);
 
-  const code = await createLoginCode(email);
+  let code: string;
+  try {
+    code = await createLoginCode(email, getClientIp(req));
+  } catch (err) {
+    if (err instanceof RateLimitError) {
+      return NextResponse.json({ error: err.message }, { status: 429 });
+    }
+    throw err;
+  }
 
   try {
     await sendEmail(

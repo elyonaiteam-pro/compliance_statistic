@@ -18,8 +18,29 @@ export function getDb(): Client {
   return _client;
 }
 
-/** Creates the schema if it doesn't exist yet. Safe to call on every boot. */
-export async function ensureSchema() {
+let _schemaPromise: Promise<void> | null = null;
+
+/**
+ * Creates the schema if it doesn't exist yet. Runs once per server instance
+ * (a failed attempt is retried on the next call), so it is cheap to call from every route.
+ */
+export function ensureSchema(): Promise<void> {
+  if (!_schemaPromise) {
+    _schemaPromise = runSchema().catch((err) => {
+      _schemaPromise = null;
+      throw err;
+    });
+  }
+  return _schemaPromise;
+}
+
+/** Test helper: forget the cached client/schema state. */
+export function resetDbForTests() {
+  _client = null;
+  _schemaPromise = null;
+}
+
+async function runSchema() {
   const db = getDb();
 
   await db.execute(`
@@ -127,4 +148,21 @@ export async function ensureSchema() {
     );
   `);
 
+  // --- Login-code hardening ---
+  // attempts: wrong guesses against a code (brute-force protection).
+  // ip: requester address, used to rate-limit code requests per IP.
+  const codeCols = await db.execute("PRAGMA table_info(login_codes)");
+  const codeColNames = new Set(codeCols.rows.map((r) => String(r.name)));
+  if (!codeColNames.has("attempts")) {
+    await db.execute("ALTER TABLE login_codes ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!codeColNames.has("ip")) {
+    await db.execute("ALTER TABLE login_codes ADD COLUMN ip TEXT");
+  }
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_login_codes_email_created ON login_codes(email, created_at)"
+  );
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_login_codes_ip_created ON login_codes(ip, created_at)"
+  );
 }

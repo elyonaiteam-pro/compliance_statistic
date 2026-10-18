@@ -31,6 +31,12 @@ const FIELD_LABELS: Record<string, string> = {
   deadline: "Срок подачи заявок",
 };
 
+/** SQLite datetime('now') yields "YYYY-MM-DD HH:MM:SS" in UTC with no zone; make it a valid UTC date in every browser (Safari included). */
+function parseDbDate(value: string): Date {
+  const hasZone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(value);
+  return new Date(hasZone ? value : `${value.replace(" ", "T")}Z`);
+}
+
 function PriceChart({ points }: { points: { x: string; y: number }[] }) {
   if (points.length < 2) return null;
 
@@ -46,7 +52,7 @@ function PriceChart({ points }: { points: { x: string; y: number }[] }) {
   const coords = points.map((p, i) => {
     const svgX = padding + (i / (points.length - 1)) * (width - padding * 2);
     const svgY = height - padding - ((p.y - min) / range) * (height - padding * 2);
-    const label = new Date(p.x).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+    const label = parseDbDate(p.x).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
     return { svgX, svgY, label, value: p.y };
   });
 
@@ -154,7 +160,7 @@ export default function ProcurementPage({ params }: { params: Promise<{ id: stri
               .map((c) => (
                 <li key={c.id} className="text-sm border-l-2 border-neutral-200 pl-3">
                   <span className="text-neutral-400">
-                    {new Date(c.detected_at).toLocaleString("ru-RU")} —{" "}
+                    {parseDbDate(c.detected_at).toLocaleString("ru-RU")} —{" "}
                   </span>
                   <span className="font-medium">{FIELD_LABELS[c.field] || c.field}: </span>
                   <span className="text-neutral-500 line-through">{c.old_value}</span>{" "}

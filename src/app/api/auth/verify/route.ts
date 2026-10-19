@@ -1,22 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ensureSchema } from "@/lib/db";
-import { verifyLoginCode, getOrCreateUser, createSession, setSessionCookie } from "@/lib/auth";
+import {
+  verifyLoginCode,
+  getOrCreateUser,
+  createSession,
+  setSessionCookie,
+  isValidEmail,
+  normalizeEmail,
+} from "@/lib/auth";
+import { readJsonObject } from "@/lib/http";
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  const { email, code } = await req.json();
+  const body = await readJsonObject(req);
 
-  if (!email || !code) {
+  if (!body || !isValidEmail(body.email) || typeof body.code !== "string" || !body.code.trim()) {
     return NextResponse.json({ error: "Введите email и код" }, { status: 400 });
   }
+  const email = normalizeEmail(body.email);
 
-  const valid = await verifyLoginCode(email, code);
+  const valid = await verifyLoginCode(email, body.code);
   if (!valid) {
     return NextResponse.json({ error: "Неверный или истёкший код" }, { status: 401 });
   }
 
   const user = await getOrCreateUser(email);
-  const token = await createSession(user.id as number);
+  const token = await createSession(Number(user.id));
   await setSessionCookie(token);
 
   return NextResponse.json({

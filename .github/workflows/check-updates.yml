@@ -34,4 +34,6 @@ jobs:
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          # Optional: HTTP(S) proxy with a Russian exit IP (ЕИС blocks/throttles foreign IPs).
+          EIS_PROXY_URL: ${{ secrets.EIS_PROXY_URL }}
         run: node scripts/check-updates.mjs

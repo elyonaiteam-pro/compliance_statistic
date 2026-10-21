@@ -78,7 +78,7 @@ describe("fetchCard: probing card URL variants", () => {
 
 describe("fetchCard: retries and backoff", () => {
   it("retries 503s with 1s then 3s backoff and succeeds", async () => {
-    const sleep = vi.fn(async (_ms: number) => {});
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {});
     const { fetchImpl, urls } = makeFetch((_url, i) => (i < 2 ? { status: 503 } : { body: cardHtml() }));
     const res = await fetchCard(REG, { fetchImpl, sleep, preferredType: "zk20" });
     expect(res.snapshot.title).toBe("Поставка бумаги");
@@ -110,8 +110,16 @@ describe("fetchCard: retries and backoff", () => {
     expect(urls).toHaveLength(3);
   });
 
+  it("surfaces the real network cause hidden behind Node's bare 'fetch failed'", async () => {
+    const err = Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+    const { fetchImpl } = makeFetch(() => err);
+    const thrown = await fetchCard(REG, { fetchImpl, sleep: noSleep, preferredType: "zk20" }).catch((e) => e);
+    expect(thrown.message).toContain("fetch failed");
+    expect(thrown.message).toContain("UND_ERR_CONNECT_TIMEOUT");
+  });
+
   it("does not retry a 404", async () => {
-    const sleep = vi.fn(async (_ms: number) => {});
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {});
     const { fetchImpl, urls } = makeFetch(() => ({ status: 404 }));
     await fetchCard(REG, { fetchImpl, sleep, preferredType: "zk20" }).catch(() => {});
     expect(sleep).not.toHaveBeenCalled();

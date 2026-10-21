@@ -86,17 +86,20 @@ export async function POST(req: NextRequest) {
     }
 
     // OR IGNORE: a concurrent request for the same number may have inserted it already.
+    const { noticeType, ...card } = snapshot;
     await db.execute({
-      sql: `INSERT OR IGNORE INTO procurements (reg_number, title, customer, price, status, deadline, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT OR IGNORE INTO procurements
+              (reg_number, title, customer, price, status, deadline, raw_json, notice_type, last_checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       args: [
         regNumber,
-        snapshot.title,
-        snapshot.customer,
-        snapshot.price,
-        snapshot.status,
-        snapshot.deadline,
-        JSON.stringify(snapshot),
+        card.title,
+        card.customer,
+        card.price,
+        card.status,
+        card.deadline,
+        JSON.stringify(card),
+        noticeType ?? null,
       ],
     });
     existing = await db.execute({

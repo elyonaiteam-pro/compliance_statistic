@@ -7,18 +7,26 @@ on:
     - cron: "0 */3 * * *"
   workflow_dispatch: {} # allows manual "Run workflow" from the Actions tab
 
+# Never run two checks at once (cron + manual run would double-notify / double-hit ЕИС).
+concurrency:
+  group: check-updates
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
+      # Locked versions from package-lock.json (the script uses cheerio, libsql, nodemailer).
       - name: Install dependencies
-        run: npm install @libsql/client cheerio nodemailer --no-save
+        run: npm ci --omit=dev
 
       - name: Run check
         env:

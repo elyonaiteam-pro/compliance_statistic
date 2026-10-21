@@ -1,0 +1,28 @@
+name: Probe ЕИС connectivity
+
+# Manual diagnostic: is zakupki.gov.ru reachable from GitHub's runners, and does the
+# configured Russian proxy (secret EIS_PROXY_URL) fix it? Optional input: a real 19-digit number.
+on:
+  workflow_dispatch:
+    inputs:
+      reg_number:
+        description: "Реестровый номер закупки для пробной загрузки карточки (необязательно)"
+        required: false
+        default: ""
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Probe
+        env:
+          EIS_PROXY_URL: ${{ secrets.EIS_PROXY_URL }}
+          PROBE_REG_NUMBER: ${{ inputs.reg_number }}
+        run: node scripts/probe-eis.mjs

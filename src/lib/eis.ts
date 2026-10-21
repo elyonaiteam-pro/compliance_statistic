@@ -6,6 +6,7 @@ import {
   EisHttpError,
   type ProcurementSnapshot as CoreSnapshot,
 } from "./eis-core.mjs";
+import { createEisFetch } from "./eis-fetch.mjs";
 
 // The implementation lives in eis-core.mjs so the cron script shares it verbatim.
 export { isValidRegNumber, parseProcurementHtml, EisParseError, EisHttpError };
@@ -23,6 +24,10 @@ export async function fetchProcurement(
   regNumber: string,
   preferredType?: string | null
 ): Promise<FetchedProcurement> {
-  const { snapshot, noticeType } = await fetchCard(regNumber, { preferredType });
+  const { snapshot, noticeType } = await fetchCard(regNumber, {
+    preferredType,
+    // Goes through EIS_PROXY_URL (Russian exit IP) when configured; see eis-fetch.mjs.
+    fetchImpl: createEisFetch(),
+  });
   return { ...snapshot, noticeType };
 }

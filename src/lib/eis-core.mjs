@@ -135,6 +135,25 @@ export function parseProcurementHtml(html, regNumber) {
 const defaultSleep = (/** @type {number} */ ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Node's fetch reports every network problem as a bare "fetch failed"; the useful part
+ * (UND_ERR_CONNECT_TIMEOUT, ECONNRESET, CERT_..., ENOTFOUND) hides in `error.cause`.
+ * Surface it so logs show WHY ЕИС is unreachable.
+ * @param {unknown} err
+ * @returns {Error}
+ */
+export function describeNetworkError(err) {
+  if (!(err instanceof Error)) return new Error(String(err));
+  const cause = /** @type {{ code?: string, message?: string } | undefined} */ (err.cause);
+  const detail = cause?.code || cause?.message;
+  const parts = [err.message];
+  if (detail && !err.message.includes(String(detail))) parts.push(String(detail));
+  if (err.name === "TimeoutError" || err.name === "AbortError") parts.push("таймаут запроса");
+  const wrapped = new Error(parts.join(": "));
+  wrapped.cause = err;
+  return wrapped;
+}
+
+/**
  * GET with timeout and bounded retries (network error, 429, 5xx) using backoff.
  * 404 and other 4xx are not retried. Returns the response body.
  * @param {string} url
@@ -162,7 +181,7 @@ export async function fetchHtml(url, options = {}) {
       throw err;
     } catch (err) {
       if (err instanceof EisHttpError && err.status !== 429 && err.status < 500) throw err;
-      lastError = err;
+      lastError = err instanceof EisHttpError ? err : describeNetworkError(err);
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Не удалось загрузить страницу ЕИС");

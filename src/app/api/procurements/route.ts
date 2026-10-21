@@ -7,6 +7,10 @@ import { readJsonObject } from "@/lib/http";
 /** Safety cap so one account can't make us scrape ЕИС without bound. */
 const MAX_TRACKED_PER_USER = 100;
 
+// Fetching a card can take a while (timeouts + retries + probing card URL variants);
+// the Vercel default of 10s on the Hobby plan is too tight.
+export const maxDuration = 30;
+
 // raw_json is internal (full scraped snapshot) and is never sent to clients.
 const PUBLIC_COLUMNS = `procurements.id, procurements.reg_number, procurements.title,
   procurements.customer, procurements.price, procurements.status, procurements.deadline,

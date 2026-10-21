@@ -2,7 +2,7 @@
 // Plain .mjs so `node scripts/check-updates.mjs` runs it without a build; all I/O
 // (db, ЕИС fetching, e-mail, sleeping) is injected so it is fully testable.
 import { applySchema } from "./schema.mjs";
-import { buildUrl, detectChanges, fetchCard as defaultFetchCard, EisParseError } from "./eis-core.mjs";
+import { buildUrl, detectChanges, fetchCard as defaultFetchCard, EisHttpError, EisParseError } from "./eis-core.mjs";
 
 const FIELD_LABELS = /** @type {Record<string, string>} */ ({
   title: "Название",
@@ -16,6 +16,8 @@ const FIELD_LABELS = /** @type {Record<string, string>} */ ({
 const QUIET_AFTER_DAYS = 30;
 /** After this many consecutive parse failures the remembered card URL variant is forgotten. */
 const REDISCOVER_AFTER_FAILURES = 3;
+/** Stop the run after this many consecutive network failures: ЕИС is down/blocked, hammering it helps nobody. */
+const ABORT_AFTER_NETWORK_FAILURES = 3;
 /** Give up on a notification after this many failed deliveries... */
 const MAX_DELIVERY_ATTEMPTS = 5;
 /** ...or when it is this old (stale news is worse than no news). */
@@ -270,6 +272,7 @@ export async function deliverPendingNotifications(db, sendEmail, options = {}) {
  * @property {number} changed
  * @property {number} failed
  * @property {number} skippedByBudget left unchecked because the time budget ran out
+ * @property {number} skippedByOutage left unchecked because ЕИС looked unreachable (consecutive network failures)
  * @property {boolean} allFailed every attempted check failed (ЕИС blocked / down)
  * @property {{ sent: number, failed: number, expired: number } | null} notifications null if e-mail is not configured
  */
@@ -300,6 +303,8 @@ export async function runMonitor({
   let changed = 0;
   let failed = 0;
   let skippedByBudget = 0;
+  let skippedByOutage = 0;
+  let networkFailuresInARow = 0;
 
   for (let i = 0; i < due.length; i++) {
     if (Date.now() - startedAt > maxRuntimeMs) {
@@ -311,11 +316,19 @@ export async function runMonitor({
     try {
       const res = await checkOne(db, row, fetchCard, { sleep });
       checked++;
+      networkFailuresInARow = 0;
       if (res.changed) changed++;
     } catch (err) {
       failed++;
       console.error(`failed checking ${row.reg_number}:`, err instanceof Error ? err.message : err);
       await recordFailure(db, row, err);
+      const isNetwork = !(err instanceof EisParseError) && !(err instanceof EisHttpError && err.status === 404);
+      networkFailuresInARow = isNetwork ? networkFailuresInARow + 1 : 0;
+      if (networkFailuresInARow >= ABORT_AFTER_NETWORK_FAILURES && i < due.length - 1) {
+        skippedByOutage = due.length - i - 1;
+        console.error(`ЕИС недоступен (${networkFailuresInARow} сбоя подряд) — прерываем проверку, пропущено: ${skippedByOutage}`);
+        break;
+      }
     }
     if (delayMs > 0 && i < due.length - 1) await sleep(delayMs);
   }
@@ -332,6 +345,7 @@ export async function runMonitor({
     changed,
     failed,
     skippedByBudget,
+    skippedByOutage,
     allFailed: attempted > 0 && failed === attempted,
     notifications,
   };

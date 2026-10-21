@@ -304,3 +304,43 @@ describe("failures", () => {
     expect(fetchCard.mock.calls[0]).toEqual([REG, expect.objectContaining({ preferredType: "ok20" })]);
   });
 });
+
+describe("ЕИС outage handling", () => {
+  async function seedMany(n: number) {
+    const userId = await makeUser(db, "u@example.com");
+    for (let i = 0; i < n; i++) await makeProcurement(db, `01732000014240001${String(i).padStart(2, "0")}`, userId);
+  }
+
+  it("stops after 3 consecutive network failures instead of hammering an unreachable ЕИС", async () => {
+    await seedMany(6);
+    const fetchCard = vi.fn(async () => {
+      throw new Error("fetch failed: UND_ERR_CONNECT_TIMEOUT");
+    });
+    const summary = await run({ fetchCard });
+    expect(fetchCard).toHaveBeenCalledTimes(3);
+    expect(summary).toMatchObject({ due: 6, failed: 3, skippedByOutage: 3, allFailed: true });
+  });
+
+  it("a success in between resets the streak", async () => {
+    await seedMany(6);
+    let call = 0;
+    const fetchCard = vi.fn(async (reg: string) => {
+      call++;
+      if (call % 3 === 0) return { snapshot: snap({ regNumber: reg }), noticeType: "zk20" };
+      throw new Error("fetch failed");
+    });
+    const summary = await run({ fetchCard });
+    expect(fetchCard).toHaveBeenCalledTimes(6);
+    expect(summary.skippedByOutage).toBe(0);
+  });
+
+  it("parse failures (bad/blocked page) never abort the run: each card is judged on its own", async () => {
+    await seedMany(5);
+    const fetchCard = vi.fn(async () => {
+      throw new EisParseError("не карточка");
+    });
+    const summary = await run({ fetchCard });
+    expect(fetchCard).toHaveBeenCalledTimes(5);
+    expect(summary.skippedByOutage).toBe(0);
+  });
+});
